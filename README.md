@@ -17,21 +17,7 @@ Production-oriented FastAPI backend for a courier/logistics platform.
 ## Roles
 `ADMIN`, `USER`, `DELIVERY_AGENT`
 
-## Run locally (Windows PowerShell)
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-copy .env.example .env
-# edit DATABASE_URL and JWT_SECRET_KEY
-alembic upgrade head
-python -m app.seed
-uvicorn app.main:app --reload
-```
 
-Swagger: http://127.0.0.1:8000/docs
-ReDoc: http://127.0.0.1:8000/redoc
-Health: http://127.0.0.1:8000/health
 
 ## PostgreSQL
 Create the database first:
