@@ -1,0 +1,14 @@
+.env
+.env.example
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+*.db
+.idea/
+.vscode/
+alembic/versions/*.py
+!alembic/versions/.gitkeep
