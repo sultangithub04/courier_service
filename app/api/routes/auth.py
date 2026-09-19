@@ -1,15 +1,37 @@
-from datetime import datetime, timezone
-from fastapi import APIRouter, HTTPException
+
+from fastapi import APIRouter, Depends, HTTPException
+
 from app.api.dependencies import DB, CurrentUser
 from app.core.rate_limit import auth_rate_limit
-from fastapi import Depends
-from app.core.security import verify_password, hash_password, decode_token
-from app.schemas.auth import *
+from app.core.security import (
+    verify_password,
+    hash_password,
+    decode_token,
+)
+from app.schemas.auth import (
+    SignupRequest,
+    LoginRequest,
+    RefreshRequest,
+    TokenResponse,
+    UserResponse,
+    UpdateProfile,
+    ChangePassword,
+    ForgotPasswordRequest,
+    ResetPasswordRequest,
+)
 from app.services import auth_service
 from app.models import RefreshToken, User
 
-router = APIRouter(prefix="/auth", tags=["Authentication"])
 
+router = APIRouter(
+    prefix="/auth",
+    tags=["Authentication"],
+)
+
+
+# ============================================================
+# SIGNUP
+# ============================================================
 
 @router.post(
     "/signup",
@@ -17,93 +39,314 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
     status_code=201,
     dependencies=[Depends(auth_rate_limit)],
 )
-def signup(data: SignupRequest, db: DB):
+def signup(
+    data: SignupRequest,
+    db: DB,
+):
     try:
-        return auth_service.signup(db, data)
-    except ValueError as e:
-        raise HTTPException(409, str(e))
+        return auth_service.signup(
+            db,
+            data,
+        )
 
+    except ValueError as e:
+        raise HTTPException(
+            status_code=409,
+            detail=str(e),
+        )
+
+
+# ============================================================
+# LOGIN
+# ============================================================
 
 @router.post(
-    "/login", response_model=TokenResponse, dependencies=[Depends(auth_rate_limit)]
+    "/login",
+    response_model=TokenResponse,
+    dependencies=[Depends(auth_rate_limit)],
 )
-def login(data: LoginRequest, db: DB):
-    user = auth_service.authenticate(db, data.email, data.password)
+def login(
+    data: LoginRequest,
+    db: DB,
+):
+    user = auth_service.authenticate(
+        db,
+        data.email,
+        data.password,
+    )
+
     if not user:
-        raise HTTPException(401, "Invalid email or password")
-    access, refresh = auth_service.issue_tokens(db, user)
-    return TokenResponse(access_token=access, refresh_token=refresh)
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid email or password",
+        )
+
+    access, refresh = auth_service.issue_tokens(
+        db,
+        user,
+    )
 
 
-@router.post("/refresh", response_model=TokenResponse)
-def refresh(data: RefreshRequest, db: DB):
+
+    return TokenResponse(
+        access_token=access,
+        refresh_token=refresh,
+        user=user,
+    )
+
+
+# ============================================================
+# REFRESH
+# ============================================================
+
+@router.post(
+    "/refresh",
+    response_model=TokenResponse,
+)
+def refresh(
+    data: RefreshRequest,
+    db: DB,
+):
     try:
-        a, r = auth_service.refresh_tokens(db, data.refresh_token)
-        return TokenResponse(access_token=a, refresh_token=r)
-    except ValueError as e:
-        raise HTTPException(401, str(e))
+        access, refresh_token = auth_service.refresh_tokens(
+            db,
+            data.refresh_token,
+        )
 
+        # Keep your existing refresh-token service behavior.
+        #
+        # If TokenResponse requires user, we need to find
+        # the user from the refresh token.
+
+        payload = decode_token(
+            refresh_token,
+            "refresh",
+        )
+
+        user_id = payload.get("sub")
+
+        if not user_id:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid refresh token",
+            )
+
+        user = (
+            db.query(User)
+            .filter(User.id == int(user_id))
+            .first()
+        )
+
+        if not user:
+            raise HTTPException(
+                status_code=401,
+                detail="User not found",
+            )
+
+        return TokenResponse(
+            access_token=access,
+            refresh_token=refresh_token,
+            user=user,
+        )
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=401,
+            detail=str(e),
+        )
+
+
+# ============================================================
+# LOGOUT
+# ============================================================
 
 @router.post("/logout")
-def logout(data: RefreshRequest, db: DB):
+def logout(
+    data: RefreshRequest,
+    db: DB,
+):
     try:
-        p = decode_token(data.refresh_token, "refresh")
+        payload = decode_token(
+            data.refresh_token,
+            "refresh",
+        )
+
     except ValueError:
-        return {"success": True, "message": "Logged out"}
-    rec = db.query(RefreshToken).filter(RefreshToken.token_jti == p.get("jti")).first()
-    if rec:
-        rec.revoked = True
-        db.commit()
-    return {"success": True, "message": "Logged out"}
+        return {
+            "success": True,
+            "message": "Logged out",
+        }
+
+    token_jti = payload.get("jti")
+
+    if token_jti:
+        record = (
+            db.query(RefreshToken)
+            .filter(
+                RefreshToken.token_jti == token_jti
+            )
+            .first()
+        )
+
+        if record:
+            record.revoked = True
+            db.commit()
+
+    return {
+        "success": True,
+        "message": "Logged out",
+    }
 
 
-@router.get("/me", response_model=UserResponse)
-def me(user: CurrentUser):
+# ============================================================
+# CURRENT USER
+# ============================================================
+
+@router.get(
+    "/me",
+    response_model=UserResponse,
+)
+def me(
+    user: CurrentUser,
+):
     return user
 
 
-@router.patch("/me", response_model=UserResponse)
-def update_me(data: UpdateProfile, user: CurrentUser, db: DB):
-    for k, v in data.model_dump(exclude_unset=True).items():
-        setattr(user, k, v)
+# ============================================================
+# UPDATE PROFILE
+# ============================================================
+
+@router.patch(
+    "/me",
+    response_model=UserResponse,
+)
+def update_me(
+    data: UpdateProfile,
+    user: CurrentUser,
+    db: DB,
+):
+    update_data = data.model_dump(
+        exclude_unset=True
+    )
+
+    for field, value in update_data.items():
+        setattr(
+            user,
+            field,
+            value,
+        )
+
     db.commit()
     db.refresh(user)
+
     return user
 
 
+# ============================================================
+# CHANGE PASSWORD
+# ============================================================
+
 @router.post("/change-password")
-def change_password(data: ChangePassword, user: CurrentUser, db: DB):
-    if not verify_password(data.current_password, user.password_hash):
-        raise HTTPException(400, "Current password is incorrect")
-    user.password_hash = hash_password(data.new_password)
+def change_password(
+    data: ChangePassword,
+    user: CurrentUser,
+    db: DB,
+):
+    if not verify_password(
+        data.current_password,
+        user.password_hash,
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Current password is incorrect",
+        )
+
+    user.password_hash = hash_password(
+        data.new_password
+    )
+
     db.commit()
-    return {"success": True, "message": "Password updated successfully"}
+
+    return {
+        "success": True,
+        "message": "Password updated successfully",
+    }
 
 
-@router.post("/forgot-password", dependencies=[Depends(auth_rate_limit)])
-def forgot(data: ForgotPasswordRequest, db: DB):
-    user = db.query(User).filter(User.email == data.email).first()
+# ============================================================
+# FORGOT PASSWORD
+# ============================================================
+
+@router.post(
+    "/forgot-password",
+    dependencies=[Depends(auth_rate_limit)],
+)
+def forgot(
+    data: ForgotPasswordRequest,
+    db: DB,
+):
+    user = (
+        db.query(User)
+        .filter(User.email == data.email)
+        .first()
+    )
+
     # Do not disclose whether the account exists.
     response = {
         "success": True,
-        "message": "If the email exists, a password reset link will be sent.",
+        "message": (
+            "If the email exists, a password reset "
+            "link will be sent."
+        ),
     }
+
     if user and user.status.value == "ACTIVE":
-        token = auth_service.create_reset_token(db, user)
-        if not auth_service.send_reset_email(user.email, token):
-            # Development only: never expose this token in production.
-            if (
-                __import__("app.core.config", fromlist=["settings"]).settings.app_env
-                == "development"
-            ):
+        token = auth_service.create_reset_token(
+            db,
+            user,
+        )
+
+        email_sent = auth_service.send_reset_email(
+            user.email,
+            token,
+        )
+
+        if not email_sent:
+            from app.core.config import settings
+
+            if settings.app_env == "development":
                 response["reset_token_dev_only"] = token
+
     return response
 
 
-@router.post("/reset-password", dependencies=[Depends(auth_rate_limit)])
-def reset(data: ResetPasswordRequest, db: DB):
+# ============================================================
+# RESET PASSWORD
+# ============================================================
+
+@router.post(
+    "/reset-password",
+    dependencies=[Depends(auth_rate_limit)],
+)
+def reset(
+    data: ResetPasswordRequest,
+    db: DB,
+):
     try:
-        auth_service.reset_password(db, data.token, data.new_password)
+        auth_service.reset_password(
+            db,
+            data.token,
+            data.new_password,
+        )
+
     except ValueError as e:
-        raise HTTPException(400, str(e))
-    return {"success": True, "message": "Password reset successfully"}
+        raise HTTPException(
+            status_code=400,
+            detail=str(e),
+        )
+
+    return {
+        "success": True,
+        "message": "Password reset successfully",
+    }
+

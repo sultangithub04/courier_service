@@ -1,4 +1,6 @@
+
 from pydantic import BaseModel, EmailStr, Field
+
 from app.models.enums import Role
 
 
@@ -27,12 +29,6 @@ class ResetPasswordRequest(BaseModel):
     new_password: str = Field(min_length=8, max_length=128)
 
 
-class TokenResponse(BaseModel):
-    access_token: str
-    refresh_token: str
-    token_type: str = "bearer"
-
-
 class UserResponse(BaseModel):
     id: int
     name: str
@@ -40,6 +36,16 @@ class UserResponse(BaseModel):
     phone: str | None
     role: Role
     status: str
+
+    class Config:
+        from_attributes = True
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    user: UserResponse
 
 
 class UpdateProfile(BaseModel):
@@ -50,3 +56,4 @@ class UpdateProfile(BaseModel):
 class ChangePassword(BaseModel):
     current_password: str
     new_password: str = Field(min_length=8, max_length=128)
+
